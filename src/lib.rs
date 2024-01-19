@@ -16,7 +16,7 @@ const DEFAULT_ADDRESS: u8 = 0x76;
 /// BMP280 driver
 pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
     com: I2C,
-    addr: u8,
+    _implicit_addr: u8,
     // Temperature compensation
     dig_t1: u16,
     dig_t2: i16,
@@ -36,13 +36,13 @@ pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
 
 impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     /// Creates new BMP280 driver with the specified address
-    pub fn new_with_address<E>(i2c: I2C, addr: u8) -> Result<BMP280<I2C>, E>
+    pub fn new_with_address<E>(i2c: I2C, _implicit_addr: u8) -> Result<BMP280<I2C>, E>
     where
         I2C: ehal::blocking::i2c::WriteRead<Error = E>,
     {
         let mut chip = BMP280 {
             com: i2c,
-            addr,
+            _implicit_addr,
             dig_t1: 0,
             dig_t2: 0,
             dig_t3: 0,
@@ -58,9 +58,9 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             dig_p9: 0,
         };
 
-        if chip.id() == 0x58 {
-            chip.read_calibration();
-        }
+        if chip.id(_implicit_addr) == 0x58 {
+            chip.read_calibration(_implicit_addr);
+        } 
 
         Ok(chip)
     }
@@ -75,11 +75,11 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
 }
 
 impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
-    fn read_calibration(&mut self) {
+    fn read_calibration(&mut self, explicit_addr: u8) {
         let mut data: [u8; 24] = [0; 24];
         let _ = self
             .com
-            .write_read(self.addr, &[Register::calib00 as u8], &mut data);
+            .write_read(explicit_addr, &[Register::calib00 as u8], &mut data);
 
         self.dig_t1 = ((data[1] as u16) << 8) | (data[0] as u16);
         self.dig_t2 = ((data[3] as i16) << 8) | (data[2] as i16);
@@ -97,11 +97,11 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Reads and returns pressure
-    pub fn pressure(&mut self) -> f64 {
+    pub fn pressure(&mut self, explicit_addr: u8) -> f64 {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
         let _ = self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data);
+            .write_read(explicit_addr, &[Register::press as u8], &mut data);
         let press = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
 
         let mut var1 = ((self.t_fine as f64) / 2.0) - 64000.0;
@@ -122,23 +122,23 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Reads and returns pressure and resets con
-    pub fn pressure_one_shot(&mut self) -> f64 {
-        let pressure = self.pressure();
+    pub fn pressure_one_shot(&mut self, explicit_addr: u8) -> f64 {
+        let pressure = self.pressure(explicit_addr);
         self.set_control(Control {
             osrs_t: Oversampling::x2,
             osrs_p: Oversampling::x16,
             mode: PowerMode::Forced,
-        });
+        }, explicit_addr);
 
         pressure
     }
 
     /// Reads and returns temperature
-    pub fn temp(&mut self) -> f64 {
+    pub fn temp(&mut self, explicit_addr: u8) -> f64 {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
         let _ = self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data);
+            .write_read(explicit_addr, &[Register::press as u8], &mut data);
         let _pres = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
         let temp = (data[3] as u32) << 12 | (data[4] as u32) << 4 | (data[5] as u32) >> 4;
 
@@ -152,8 +152,8 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Returns current config
-    pub fn config(&mut self) -> Config {
-        let config = self.read_byte(Register::config);
+    pub fn config(&mut self, explicit_addr: u8) -> Config {
+        let config = self.read_byte(Register::config, explicit_addr);
         let t_sb = match (config & (0b111 << 5)) >> 5 {
             x if x == Standby::ms0_5 as u8 => Standby::ms0_5,
             x if x == Standby::ms62_5 as u8 => Standby::ms62_5,
@@ -180,24 +180,24 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Sets configuration
-    pub fn set_config(&mut self, new: Config) {
+    pub fn set_config(&mut self, new: Config, explicit_addr: u8) {
         let config: u8 = 0x00;
         let t_sb = (new.t_sb as u8) << 5;
         let filter = (new.filter as u8) << 2;
-        self.write_byte(Register::config, config | t_sb | filter);
+        self.write_byte(Register::config, config | t_sb | filter, explicit_addr);
     }
 
     /// Sets control
-    pub fn set_control(&mut self, new: Control) {
+    pub fn set_control(&mut self, new: Control, explicit_addr: u8) {
         let osrs_t: u8 = (new.osrs_t as u8) << 5;
         let osrs_p: u8 = (new.osrs_p as u8) << 2;
         let control: u8 = osrs_t | osrs_p | (new.mode as u8);
-        self.write_byte(Register::ctrl_meas, control);
+        self.write_byte(Register::ctrl_meas, control, explicit_addr);
     }
 
     /// Returns control
-    pub fn control(&mut self) -> Control {
-        let config = self.read_byte(Register::ctrl_meas);
+    pub fn control(&mut self, explicit_addr: u8) -> Control {
+        let config = self.read_byte(Register::ctrl_meas, explicit_addr);
         let osrs_t = match (config & (0b111 << 5)) >> 5 {
             x if x == Oversampling::skipped as u8 => Oversampling::skipped,
             x if x == Oversampling::x1 as u8 => Oversampling::x1,
@@ -229,8 +229,8 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Returns device status
-    pub fn status(&mut self) -> Status {
-        let status = self.read_byte(Register::status);
+    pub fn status(&mut self, explicit_addr: u8) -> Status {
+        let status = self.read_byte(Register::status, explicit_addr);
         Status {
             measuring: 0 != (status & 0b00001000),
             im_update: 0 != (status & 0b00000001),
@@ -238,25 +238,25 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     }
 
     /// Returns device id
-    pub fn id(&mut self) -> u8 {
-        self.read_byte(Register::id)
+    pub fn id(&mut self, explicit_addr: u8) -> u8 {
+        self.read_byte(Register::id, explicit_addr)
     }
 
     /// Software reset, emulates POR
-    pub fn reset(&mut self) {
-        self.write_byte(Register::reset, 0xB6); // Magic from documentation
+    pub fn reset(&mut self, explicit_addr: u8) {
+        self.write_byte(Register::reset, 0xB6, explicit_addr); // 0xB6: Magic from documentation
     }
 
-    fn write_byte(&mut self, reg: Register, byte: u8) {
+    fn write_byte(&mut self, reg: Register, byte: u8, explicit_addr: u8) {
         let mut buffer = [0];
         let _ = self
             .com
-            .write_read(self.addr, &[reg as u8, byte], &mut buffer);
+            .write_read(explicit_addr, &[reg as u8, byte], &mut buffer);
     }
 
-    fn read_byte(&mut self, reg: Register) -> u8 {
+    fn read_byte(&mut self, reg: Register, explicit_addr: u8) -> u8 {
         let mut data: [u8; 1] = [0];
-        let _ = self.com.write_read(self.addr, &[reg as u8], &mut data);
+        let _ = self.com.write_read(explicit_addr, &[reg as u8], &mut data);
         data[0]
     }
 }
