@@ -16,7 +16,6 @@ const DEFAULT_ADDRESS: u8 = 0x76;
 /// BMP280 driver
 pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
     com: I2C,
-    _implicit_addr: u8,
     // Temperature compensation
     dig_t1: u16,
     dig_t2: i16,
@@ -35,14 +34,13 @@ pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
 }
 
 impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
-    /// Creates new BMP280 driver with the specified address
-    pub fn new_with_address<E>(i2c: I2C, _implicit_addr: u8) -> Result<BMP280<I2C>, E>
+    /// Creates new BMP280 driver with no specific address
+    pub fn new_with_no_address<E>(i2c: I2C) -> Result<BMP280<I2C>, E>
     where
         I2C: ehal::blocking::i2c::WriteRead<Error = E>,
     {
         let mut chip = BMP280 {
             com: i2c,
-            _implicit_addr,
             dig_t1: 0,
             dig_t2: 0,
             dig_t3: 0,
@@ -57,25 +55,24 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
             dig_p8: 0,
             dig_p9: 0,
         };
-
-        if chip.id(_implicit_addr) == 0x58 {
-            chip.read_calibration(_implicit_addr);
+	if chip.id(DEFAULT_ADDRESS) == 0x58 {
+            chip.read_calibration(DEFAULT_ADDRESS);
         } 
-
         Ok(chip)
     }
 
-    /// Create a new BMP280 driver with the default address
+    /// Create a new BMP280 driver with no implicit address
     pub fn new<E>(i2c: I2C) -> Result<BMP280<I2C>, E>
     where
         I2C: ehal::blocking::i2c::WriteRead<Error = E>
     {
-        Self::new_with_address(i2c, DEFAULT_ADDRESS)
+        Self::new_with_no_address(i2c)
     }
 }
 
 impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
-    fn read_calibration(&mut self, explicit_addr: u8) {
+    /// Read calibration data 
+    pub fn read_calibration(&mut self, explicit_addr: u8) {
         let mut data: [u8; 24] = [0; 24];
         let _ = self
             .com
