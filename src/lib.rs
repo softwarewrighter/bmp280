@@ -13,14 +13,18 @@ use core::fmt;
 /// The default address for the BMP280
 const DEFAULT_ADDRESS: u8 = 0x76;
 
-/// BMP280 driver
-pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
-    com: I2C,
-    // Temperature compensation
+/// the temperature compensation values for one sensor
+#[derive(Clone, Debug)]
+pub struct TempComp {
+   // Temperature compensation
     dig_t1: u16,
     dig_t2: i16,
     dig_t3: i16,
     t_fine: i32,
+}
+/// the pressure compensation values for one sensor
+#[derive(Clone, Debug)]
+pub struct PressureComp {
     // Pressure calibration
     dig_p1: u16,
     dig_p2: i16,
@@ -32,6 +36,19 @@ pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
     dig_p8: i16,
     dig_p9: i16,
 }
+/// Contains the two I2C sensors calibration data
+#[derive(Clone, Debug)]
+pub struct Sensors {
+    x76_pres_comp: Option<PressureComp>,
+    x76_temp_comp: Option<TempComp>,
+    x77_pres_comp: Option<PressureComp>,
+    x77_temp_comp: Option<TempComp>,
+}
+/// BMP280 driver
+pub struct BMP280<I2C: ehal::blocking::i2c::WriteRead> {
+    com: I2C,
+    sensors: Sensors,
+}
 
 impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     /// Creates new BMP280 driver with no specific address
@@ -41,19 +58,12 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
     {
         let mut chip = BMP280 {
             com: i2c,
-            dig_t1: 0,
-            dig_t2: 0,
-            dig_t3: 0,
-            t_fine: 0,
-            dig_p1: 0,
-            dig_p2: 0,
-            dig_p3: 0,
-            dig_p4: 0,
-            dig_p5: 0,
-            dig_p6: 0,
-            dig_p7: 0,
-            dig_p8: 0,
-            dig_p9: 0,
+	    sensors: Sensors {
+		x76_pres_comp: None,
+		x76_temp_comp: None,
+		x77_pres_comp: None,
+		x77_temp_comp: None,
+	    },
         };
 	if chip.id(DEFAULT_ADDRESS) == 0x58 {
             chip.read_calibration(DEFAULT_ADDRESS);
@@ -77,43 +87,68 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
         let _ = self
             .com
             .write_read(explicit_addr, &[Register::calib00 as u8], &mut data);
-
-        self.dig_t1 = ((data[1] as u16) << 8) | (data[0] as u16);
-        self.dig_t2 = ((data[3] as i16) << 8) | (data[2] as i16);
-        self.dig_t3 = ((data[5] as i16) << 8) | (data[4] as i16);
-
-        self.dig_p1 = ((data[7] as u16) << 8) | (data[6] as u16);
-        self.dig_p2 = ((data[9] as i16) << 8) | (data[8] as i16);
-        self.dig_p3 = ((data[11] as i16) << 8) | (data[10] as i16);
-        self.dig_p4 = ((data[13] as i16) << 8) | (data[12] as i16);
-        self.dig_p5 = ((data[15] as i16) << 8) | (data[14] as i16);
-        self.dig_p6 = ((data[17] as i16) << 8) | (data[16] as i16);
-        self.dig_p7 = ((data[19] as i16) << 8) | (data[18] as i16);
-        self.dig_p8 = ((data[21] as i16) << 8) | (data[20] as i16);
-        self.dig_p9 = ((data[23] as i16) << 8) | (data[22] as i16);
+	let temp_comp = TempComp {
+            dig_t1: ((data[1] as u16) << 8) | (data[0] as u16),
+            dig_t2: ((data[3] as i16) << 8) | (data[2] as i16),
+            dig_t3: ((data[5] as i16) << 8) | (data[4] as i16),
+	    t_fine: 0,
+	};
+	let pres_comp = PressureComp {
+	    dig_p1: ((data[7] as u16) << 8) | (data[6] as u16),
+	    dig_p2: ((data[9] as i16) << 8) | (data[8] as i16),
+	    dig_p3: ((data[11] as i16) << 8) | (data[10] as i16),
+	    dig_p4: ((data[13] as i16) << 8) | (data[12] as i16),
+	    dig_p5:  ((data[15] as i16) << 8) | (data[14] as i16),
+	    dig_p6: ((data[17] as i16) << 8) | (data[16] as i16),
+	    dig_p7: ((data[19] as i16) << 8) | (data[18] as i16),
+	    dig_p8: ((data[21] as i16) << 8) | (data[20] as i16),
+	    dig_p9: ((data[23] as i16) << 8) | (data[22] as i16),
+	};
+	match explicit_addr {
+	    0x76 => {
+		self.sensors.x76_temp_comp = Some(temp_comp);
+		self.sensors.x76_pres_comp = Some(pres_comp);
+	    },
+	    0x77 => {
+		self.sensors.x77_temp_comp = Some(temp_comp);
+		self.sensors.x77_pres_comp = Some(pres_comp);
+	    },
+	    _ => panic!("invalid I2C sensor address {}", explicit_addr),
+	}
     }
 
     /// Reads and returns pressure
     pub fn pressure(&mut self, explicit_addr: u8) -> f64 {
+	let pres_comp = match explicit_addr {
+	    0x76 => <Option<PressureComp> as Clone>::clone(&self.sensors.x76_pres_comp).unwrap(),
+	    0x77 => <Option<PressureComp> as Clone>::clone(&self.sensors.x77_pres_comp).unwrap(),
+	    _ => panic!("invalid I2C sensor address {}", explicit_addr),
+	};
+	let temp_comp = match explicit_addr {
+	    0x76 => <Option<TempComp> as Clone>::clone(&self.sensors.x76_temp_comp).unwrap(),
+	    0x77 => <Option<TempComp> as Clone>::clone(&self.sensors.x77_temp_comp).unwrap(),
+	    _ => panic!("invalid I2C sensor address {}", explicit_addr),
+	};
+	
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
         let _ = self
             .com
             .write_read(explicit_addr, &[Register::press as u8], &mut data);
         let press = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
 
-        let mut var1 = ((self.t_fine as f64) / 2.0) - 64000.0;
-        let mut var2 = var1 * var1 * (self.dig_p6 as f64) / 32768.0;
-        var2 += var1 * (self.dig_p5 as f64) * 2.0;
-        var2 = (var2 / 4.0) + ((self.dig_p4 as f64) * 65536.0);
-        var1 = ((self.dig_p3 as f64) * var1 * var1 / 524288.0 + (self.dig_p2 as f64) * var1)
+        let mut var1 = ((temp_comp.t_fine as f64) / 2.0) - 64000.0;
+        let mut var2 = var1 * var1 * (pres_comp.dig_p6 as f64) / 32768.0;
+        var2 += var1 * (pres_comp.dig_p5 as f64) * 2.0;
+        var2 = (var2 / 4.0) + ((pres_comp.dig_p4 as f64) * 65536.0);
+        var1 = ((pres_comp.dig_p3 as f64) * var1 * var1 / 524288.0 + (pres_comp.dig_p2 as f64) * var1)
             / 524288.0;
-        var1 = (1.0 + var1 / 32768.0) * (self.dig_p1 as f64);
+        var1 = (1.0 + var1 / 32768.0) * (pres_comp.dig_p1 as f64);
         let mut pressure = 1048576.0 - (press as f64);
         if var1 != 0.0 {
             pressure = (pressure - (var2 / 4096.0)) * 6250.0 / var1;
-            var1 = (self.dig_p9 as f64) * pressure * pressure / 2147483648.0;
-            var2 = pressure * (self.dig_p8 as f64) / 32768.0;
-            pressure += (var1 + var2 + (self.dig_p7 as f64)) / 16.0;
+            var1 = (pres_comp.dig_p9 as f64) * pressure * pressure / 2147483648.0;
+            var2 = pressure * (pres_comp.dig_p8 as f64) / 32768.0;
+            pressure += (var1 + var2 + (pres_comp.dig_p7 as f64)) / 16.0;
         }
         pressure
     }
@@ -132,6 +167,12 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
 
     /// Reads and returns temperature
     pub fn temp(&mut self, explicit_addr: u8) -> f64 {
+	let mut temp_comp = match explicit_addr {
+	    0x76 => <Option<TempComp> as Clone>::clone(&self.sensors.x76_temp_comp).unwrap(),
+	    0x77 => <Option<TempComp> as Clone>::clone(&self.sensors.x77_temp_comp).unwrap(),
+	    _ => panic!("invalid I2C sensor address {}", explicit_addr),
+	};
+
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
         let _ = self
             .com
@@ -139,11 +180,11 @@ impl<I2C: ehal::blocking::i2c::WriteRead> BMP280<I2C> {
         let _pres = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
         let temp = (data[3] as u32) << 12 | (data[4] as u32) << 4 | (data[5] as u32) >> 4;
 
-        let v1 = ((temp as f64) / 16384.0 - (self.dig_t1 as f64) / 1024.0) * (self.dig_t2 as f64);
-        let v2 = (((temp as f64) / 131072.0 - (self.dig_t1 as f64) / 8192.0)
-            * ((temp as f64) / 131072.0 - (self.dig_t1 as f64) / 8192.0))
-            * (self.dig_t3 as f64);
-        self.t_fine = (v1 + v2) as i32;
+        let v1 = ((temp as f64) / 16384.0 - (temp_comp.dig_t1 as f64) / 1024.0) * (temp_comp.dig_t2 as f64);
+        let v2 = (((temp as f64) / 131072.0 - (temp_comp.dig_t1 as f64) / 8192.0)
+            * ((temp as f64) / 131072.0 - (temp_comp.dig_t1 as f64) / 8192.0))
+            * (temp_comp.dig_t3 as f64);
+        temp_comp.t_fine = (v1 + v2) as i32;
 
         (v1 + v2) / 5120.0
     }
@@ -382,3 +423,18 @@ enum Register {
     press = 0xF7,
     calib00 = 0x88,
 }
+
+//
+            // dig_t1: 0,
+            // dig_t2: 0,
+            // dig_t3: 0,
+            // t_fine: 0,
+            // dig_p1: 0,
+            // dig_p2: 0,
+            // dig_p3: 0,
+            // dig_p4: 0,
+            // dig_p5: 0,
+            // dig_p6: 0,
+            // dig_p7: 0,
+            // dig_p8: 0,
+            // dig_p9: 0,
